@@ -1,0 +1,210 @@
+import subprocess
+import pandas as pd
+import openpyxl
+import re
+
+# BLAST搜索的路径设置
+query_file = input("一致度計算したい配列ファイル経路を指定しでください")
+output_file = input("一致度計算結果出力経路を指定しでください")
+blastdb_path = input("一致度計算用のデータペースの経路を指定しでください")
+
+# 函数：运行BLAST搜索
+def run_blast_search():
+    blast_cmd = ["blastp", "-query", query_file, "-db", blastdb_path, "-out", output_file]
+    subprocess.run(blast_cmd, check=True)
+    print("一致度計算完了しました、結果は指定したファイルに出力しました:", output_file)
+
+    # 解析BLAST输出
+    max_score = None
+    best_sequence_info = None
+    sequence_info = None
+    with open(output_file, "r") as blast_output:
+        for line in blast_output:
+            if line.startswith(">"):
+                sequence_info = line.strip()
+            elif line.startswith(" Score = "):
+                score = float(line.split("=")[1].split(" bits")[0])
+                if max_score is None or score > max_score:
+                    max_score = score
+                    best_sequence_info = sequence_info
+
+    if best_sequence_info is not None:
+        print("最高Score: {:.1f}".format(max_score))
+        print("配列名:", best_sequence_info)
+    else:
+        print("一致の配列が見つからない")
+
+    protein_sequences = []
+    with open(output_file, "r") as blast_output:
+        for line in blast_output:
+            if line.startswith(">"):
+                protein_sequence = line.strip()
+                protein_sequences.append(protein_sequence)
+                if len(protein_sequences) == 3:
+                    break
+
+    print("一致度一番高いの三つの配列情報:")
+    for sequence in protein_sequences:
+        print(sequence)
+# 函数：处理CSV文件并写入到Excel
+def process_csv_to_excel():
+    print('\'x\' 入力して前のステップに戻す！！！')
+
+    while True:
+        print('\nファイル名を入力しでください：')
+        bio_name = input()
+        if bio_name == 'x':
+            break
+
+        csv_file_path = f'/Users/kyokuhousya/Downloads/GPCRdb/{bio_name}.csv'
+        excel_file_path = f'/Users/kyokuhousya/Downloads/GPCRdb/{bio_name}.xlsx'
+
+        try:
+            df = pd.read_csv(csv_file_path)
+            with pd.ExcelWriter(excel_file_path, engine='openpyxl', mode='w') as writer:
+                df.to_excel(writer, sheet_name='配列1', index=False)
+
+            workbook = openpyxl.load_workbook(excel_file_path)
+            sheet_names = workbook.sheetnames
+            print(sheet_names)
+            for i, sheet_name in enumerate(sheet_names):
+                print(f'{i}：{sheet_name}')
+
+            print("\n表番号を選んでください：")
+            sheet_index = int(input())
+            sheet = workbook[sheet_names[sheet_index]]
+
+            while True:
+                print("\nGPCR名を入力しでください（ 'x' 入力して前のステップに戻す）：")
+                search_term = input()
+                if search_term == 'x':
+                    break
+
+                first_search_results = []
+                for row in sheet.iter_rows(min_row=3, values_only=True):
+                    if search_term.lower() in str(row).lower():
+                        for x, y in zip(sheet['2'], row):
+                            print(f'{x.value}: {y}')
+
+                print("\nジェネリクナンバーを検索しますか？（ 'yes' 入力して続きます）:")
+                reverse_output_option = input()
+                if reverse_output_option.lower() == 'yes':
+                    for row in first_search_results:
+                        for header, value in zip(sheet['2'], row):
+                            if header.value is not None:
+                                # 输出标题列不为空的部分
+                                print(f'{header.value}: {value}')
+                    print("\n結果出力完了！")
+
+        except FileNotFoundError:
+            print("\nファイル名を確認した上、もう一度入力しでください")
+
+# 函数：运行MAFFT进行序列比对并更新现有CSV文件
+def run_mafft_and_update_csv():
+    # 获取用户输入的两组序列
+    group_name_1 = input('アライメント用の配列Iの名前を入力してください：')
+    print(f'{group_name_1}の配列を入力してください（enterで終了）：')
+    input_sequences_1 = []
+    while True:
+        sequence = input()
+        if not sequence:
+            break
+        input_sequences_1.append(sequence)
+
+    group_name_2 = input('アライメント用の配列IIの名前を入力してください：')
+    print(f'{group_name_2}の配列を入力してください（enterで終了）：')
+    input_sequences_2 = []
+    while True:
+        sequence = input()
+        if not sequence:
+            break
+        input_sequences_2.append(sequence)
+
+    # 将输入的序列保存到FASTA文件
+    fasta_file = 'temp.fasta'
+    with open(fasta_file, 'w') as f:
+        f.write(f'>{group_name_1}\n' + '\n'.join(input_sequences_1) + '\n')
+        f.write(f'>{group_name_2}\n' + '\n'.join(input_sequences_2) + '\n')
+
+    # 运行MAFFT
+    mafft_cmd = f'mafft --auto {fasta_file}'
+    mafft_output = subprocess.check_output(mafft_cmd, shell=True, encoding='utf-8')
+
+    # 提取序列结果
+    alignment_result = mafft_output.split('>')
+    sequence_result = alignment_result[1]  # 提取第一组序列结果
+    title, seq = sequence_result.split('\n', 1)
+    seq_chars = list(seq.replace('\n', ''))
+
+    # 读取现有CSV文件
+    csv_file_path = '/Users/kyokuhousya/Downloads/GPCRdb/ClassA.csv'  # 更新为您的文件路径
+    df = pd.read_csv(csv_file_path)
+
+    # 将序列名称和每个字符添加为新的行
+    new_row = [title] + seq_chars
+    new_row += [''] * (df.shape[1] - len(new_row))  # 填充空白以匹配原有数据列数
+    df.loc[df.shape[0]] = new_row
+
+    # 保存更新后的DataFrame回CSV文件
+    df.to_csv(csv_file_path, index=False)
+    print(f"アライメント結果は指定したファイルに出力しました: {csv_file_path}")
+
+# 函数：根据名称提取序列
+def extract_sequence_by_name(name, content):
+    pattern = re.compile(f">{re.escape(name)}\n([A-Z-]+)", re.DOTALL)
+    match = pattern.search(content)
+    if match:
+        return match.group(1)
+    else:
+        print(f"DEBUG: No match found for protein name: {name}")
+        return None
+
+# 函数：检索序列
+def search_sequences():
+    search_database_path = "/Users/kyokuhousya/Downloads/GPCRdb/data_count.fasta"
+    while True:
+        protein_names_to_extract = []
+        print('配列を調べたいタンパク質名称を入力しでください (\'x\' で終了): ')
+        protein_name = input()
+        if protein_name.lower() == 'x':
+            break
+        protein_names_to_extract.append(protein_name)
+
+        with open(search_database_path, "r") as search_database:
+            file_content = search_database.read()
+
+        for protein_name in protein_names_to_extract:
+            print(f"DEBUG: Searching for protein name: {protein_name}")
+            protein_sequence = extract_sequence_by_name(protein_name, file_content)
+            if protein_sequence is not None:
+                print(f"name: {protein_name}")
+                print(f"配列: {protein_sequence}")
+            else:
+                print(f" {protein_name} の配列は見つからなかった。")
+
+# 主程序
+def main():
+    while True:
+        print("1: 一致度計算")
+        print("2: ジェネリクナンバー検索")
+        print("3: アライメント")
+        print("4: 配列検索")
+        print("5: 終了")
+        choice = input("選択肢を一つ選んでください: ")
+
+        if choice == "1":
+            run_blast_search()
+        elif choice == "2":
+            process_csv_to_excel()
+        elif choice == "3":
+            run_mafft_and_update_csv()
+        elif choice == "4":
+            search_sequences()
+        elif choice == "5":
+            print("スクリプト終了")
+            break
+        else:
+            print("無効の入力です、再入力しでください")
+
+if __name__ == "__main__":
+    main()
